@@ -1,64 +1,111 @@
-from datetime import date
-import json
-import os
-from typing import Literal, Optional
-from uuid import uuid4
-from fastapi import FastAPI, HTTPException
-import random
 
-from fastapi.encoders import jsonable_encoder
-from pydantic import BaseModel
+from fastapi import FastAPI, Depends, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from typing import List
+from sqlalchemy import Float
+from sqlalchemy.orm import Session
+import crud
+import models
+import schemas
+from database import engine, get_db
+from datetime import date
+
+models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
-class Contract (BaseModel):
-    id: Optional[str] = uuid4().hex
-    name: str
-    value: float
-    status: Literal["aberto", "fechado"]
-    due_date: date = date.today()
-    category: Literal["category 1", "category 2", "category 3"]
-    supplier: str
-    user: str
+origins = ["*"]
 
-CONTRACT_DATABASE = []
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-CONTRACTS_FILE = "contracts.json"
+# list all contracts
+@app.get("/contracts/", response_model=List[schemas.ContractResponse])
+async def lists_contracts(
+    supplier: str | None = None,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(10, ge=1, le=100),
+    db: Session = Depends(get_db)):
+    return crud.list_contracts(db,skip,limit, supplier)
 
-if os.path.exists(CONTRACTS_FILE):
-    with open (CONTRACTS_FILE, "r") as f:
-        CONTRACT_DATABASE = json.load(f)
+# list all contracts by status
+@app.get("/contracts/by-status", response_model=List[schemas.ContractResponse])
+async def list_contracts_by_status(
+    status: str | None= None,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(10, ge=1, le=100),
+    db: Session = Depends(get_db)):
+    return crud.list_contracts_by_status(db,skip,limit,status)
+
+# list all contracts by category
+@app.get("/contracts/by-category", response_model=List[schemas.ContractResponse])
+async def list_contracts_by_category(
+    category: str | None= None,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(10, ge=1, le=100),
+    db: Session = Depends(get_db)):
+    return crud.list_contracts_by_category(db,skip,limit,category)
+
+# list all contracts by value range
+@app.get("/contracts/by-value-range", response_model=List[schemas.ContractResponse])
+async def list_contracts_by_value_range(
+    start_value: float,
+    end_value: float,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(10, ge=1, le=100),
+    db: Session = Depends(get_db)):
+    return crud.list_contracts_by_value_range(db,skip,limit,start_value,end_value)
 
 
-# / -> welcome
-@app.get("/")
-async def home():
-    return "Welcome to my Contract Manager"
+# list all contracts by date range
+@app.get("/contracts/by-date-range", response_model=List[schemas.ContractResponse])
+async def list_contracts_by_date_range(
+    start_date: date | date = date.today(),
+    end_date: date | date = date.today(),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(10, ge=1, le=100),
+    db: Session = Depends(get_db)):
+    return crud.list_contracts_by_date_range(db,skip,limit,start_date,end_date)
 
-@app.get('/list-contracts')
-async def list_contracts():
-    return {"contracts": CONTRACT_DATABASE}
 
-@app.get('/list-contract-by-index/{index}')
-async def list_contract_by_index(index: int):
-    if index < 0 or index >= len(CONTRACT_DATABASE):
-        # error
-        raise HTTPException(404, "Index out of range")
-    else:
-        return {
-            "contracts": CONTRACT_DATABASE[index]
-    }
+# get one contract
+@app.get("/contracts/{id}", response_model=schemas.ContractResponse)
+async def get_contract_by_id(id: int, db: Session = Depends(get_db)):
+    db_contract = crud.get_contract_by_id(db,id)
+    if db_contract is None:
+        raise HTTPException(status_code=404, detail="Contrato não encontrado")
+    return db_contract
 
-@app.get('/get-random-contract')
-async def get_random_contract():
-    return random.choice(CONTRACT_DATABASE)
+# add a contract
+@app.post("/contracts", response_model=schemas.ContractResponse)
+async def create_contract(contract: schemas.ContractCreate, db: Session = Depends(get_db)):
+    return crud.create_contract(db,contract)
 
-@app.post('/add-contract')
-async def add_contract(contract: Contract):
-    contract.id = uuid4().hex
-    json_contract = jsonable_encoder(contract)
-    CONTRACT_DATABASE.append(json_contract)
+# update a contract
+@app.put("/contracts/{id}", response_model=schemas.ContractResponse)
+async def update_contract(id: int, contract: schemas.ContractCreate, db: Session = Depends(get_db)):
+    db_contract = crud.get_contract_by_id(db,id)
+    if db_contract is None:
+        raise HTTPException(status_code=404, detail="Contrato não encontrado")
+    return crud.update_contract(db, id, contract)
 
-    with open(CONTRACTS_FILE, "w") as f:
-        json.dump(CONTRACT_DATABASE, f)
-    return { "message": f'Contrato {contract.name} was added'}
+# delete a contract
+@app.delete("/contracts/{id}")
+async def delete_contract(id: int, db: Session = Depends(get_db)):
+    db_contract = crud.get_contract_by_id(db,id)
+    if db_contract is None:
+        raise HTTPException(status_code=404, detail="Contrato não encontrado")
+
+    crud.delete_contract(db, id)
+    
+    return { "message": "Contract sucessfuly deleted !"}
+
+def contract_validate(id: int, db: Session = Depends(get_db)):
+    db_contract = crud.get_contract_by_id(db,id)
+    if db_contract is None:
+        raise HTTPException(status_code=404, detail="Contrato não encontrado")
